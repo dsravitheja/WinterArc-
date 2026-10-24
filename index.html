@@ -186,21 +186,28 @@ function lastSets(name){
   }
   return [];
 }
+function mkEx(n,ns,rng){
+  const last=lastSets(n), top=rng?+rng.split('-').pop():Infinity;
+  const lw=last.length?last[last.length-1].w:0;
+  const prog=last.length>=ns&&last.every(s=>s.r>=top)&&lw>0;
+  let hint='';
+  if(last.length)hint='Last: '+last.map(s=>`${s.w||'BW'}×${s.r}`).join(' · ')+(prog?' — hit the top of the range, so +2.5 kg today':' — beat it by 1 rep');
+  return {n,ns,rng,hint,sets:Array.from({length:ns},(_,i)=>{
+    const ref=last[i]||last[last.length-1];
+    let w=ref?ref.w:'';
+    if(w&&prog)w=Math.round((w+2.5)*2)/2;
+    return {w:w||'',r:'',ph:ref?String(ref.r):'',done:false};
+  })};
+}
+function knownExercises(){
+  const s=new Set();
+  Object.values(PLAN).forEach(p=>p.ex.forEach(e=>s.add(e[0])));
+  S.workouts.forEach(w=>w.ex.forEach(e=>s.add(e.n)));
+  return [...s].sort((x,y)=>x.localeCompare(y));
+}
 function startWorkout(type){
   const p=PLAN[type];
-  S.active={type,date:fmt(new Date()),t0:Date.now(),ex:p.ex.map(([n,ns,rng])=>{
-    const last=lastSets(n), top=+rng.split('-').pop();
-    const lw=last.length?last[last.length-1].w:0;
-    const prog=last.length>=ns&&last.every(s=>s.r>=top)&&lw>0;
-    let hint='';
-    if(last.length)hint='Last: '+last.map(s=>`${s.w||'BW'}×${s.r}`).join(' · ')+(prog?' — hit the top of the range, so +2.5 kg today':' — beat it by 1 rep');
-    return {n,ns,rng,hint,sets:Array.from({length:ns},(_,i)=>{
-      const ref=last[i]||last[last.length-1];
-      let w=ref?ref.w:'';
-      if(w&&prog)w=Math.round((w+2.5)*2)/2;
-      return {w:w||'',r:'',ph:ref?String(ref.r):'',done:false};
-    })};
-  })};
+  S.active={type,date:fmt(new Date()),t0:Date.now(),ex:p.ex.map(([n,ns,rng])=>mkEx(n,ns,rng))};
   save();lockScreen();
 }
 function syncActive(){
@@ -300,7 +307,7 @@ function rActive(){
   return `
   <h1>${p.name}</h1>
   <div class="sub" id="elapsed">${Math.floor((Date.now()-a.t0)/60000)} min</div>
-  ${a.ex.map((e,i)=>`<div class="card"><h2>${esc(e.n)} · ${e.ns}×${e.rng.replace(/(\d+)-\1$/,'$1')}</h2>
+  ${a.ex.map((e,i)=>`<div class="card"><h2>${esc(e.n)}${e.rng?` · ${e.ns}×${e.rng.replace(/(\d+)-\1$/,'$1')}`:' · custom'}</h2>
     ${e.hint?`<div class="hint">${esc(e.hint)}</div>`:''}
     <div class="sets"><div class="sh">Set</div><div class="sh">kg</div><div class="sh">Reps</div><div></div>
     ${e.sets.map((s,j)=>`<div class="sn">${j+1}</div>
@@ -308,7 +315,16 @@ function rActive(){
       <input type="number" inputmode="numeric" placeholder="${s.ph||'reps'}" value="${s.r}" data-chg="sr" data-i="${i}" data-j="${j}">
       <button class="dn ${s.done?'on':''}" data-act="setdone" data-i="${i}" data-j="${j}">${s.done?'✓':''}</button>`).join('')}
     </div>
-    <div class="acts"><button class="mini" data-act="addset" data-i="${i}">+ Set</button><button class="mini" data-act="rmset" data-i="${i}">− Set</button></div></div>`).join('')}
+    <div class="acts"><button class="mini" data-act="addset" data-i="${i}">+ Set</button><button class="mini" data-act="rmset" data-i="${i}">− Set</button><button class="mini" data-act="rmex" data-i="${i}" style="margin-left:auto">Remove</button></div></div>`).join('')}
+  <div class="card"><h2>Add exercise</h2>
+    <div class="hint">Not in the plan? Add it here. Exercises you've logged before are suggested and bring their last numbers.</div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <input id="newex" list="exlist" placeholder="Exercise name" autocomplete="off" style="flex:1;width:auto">
+      <input id="newns" type="number" inputmode="numeric" value="3" min="1" max="10" aria-label="Sets" style="width:64px;text-align:center">
+    </div>
+    <div class="hint" style="margin-top:4px">Name, then number of sets</div>
+    <datalist id="exlist">${knownExercises().map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
+    <button class="btn ghost" data-act="addex">+ Add exercise</button></div>
   <button class="btn" data-act="finish">Finish workout · ${done} sets</button>
   <button class="btn ghost danger" data-act="cancel">Discard workout</button>
   <div id="restbar" class="restbar ${left>0?'':'hide'}"><span id="rest">Rest ${Math.floor(left/60)}:${pad(left%60)}</span><button data-act="restadd">+30s</button><button data-act="restskip">Skip</button></div>`;
@@ -445,6 +461,23 @@ const ACT={
     s.done=!s.done;
     if(s.done)rest.end=Date.now()+90000;
     save();render();
+  },
+  addex(){
+    syncActive();
+    const el=$('#newex'), raw=((el&&el.value)||'').trim();
+    if(!raw)return toast('Type an exercise name');
+    const known=knownExercises().find(n=>n.toLowerCase()===raw.toLowerCase());
+    const n=known||raw;
+    const ns=Math.max(1,Math.min(10,parseInt(($('#newns')||{}).value)||3));
+    S.active.ex.push(mkEx(n,ns,''));
+    save();render();
+    toast(n+' added');
+    window.scrollTo(0,document.body.scrollHeight);
+  },
+  rmex(t){
+    syncActive();
+    const e=S.active.ex[+t.dataset.i];
+    if(e&&confirm('Remove '+e.n+' from this workout?')){S.active.ex.splice(+t.dataset.i,1);save();render()}
   },
   addset(t){syncActive();const e=S.active.ex[+t.dataset.i],l=e.sets[e.sets.length-1];e.sets.push({w:l?l.w:'',r:'',ph:l?l.ph:'',done:false});save();render()},
   rmset(t){syncActive();const e=S.active.ex[+t.dataset.i];if(e.sets.length>1)e.sets.pop();save();render()},
